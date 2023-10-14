@@ -7,116 +7,82 @@
   </div>
 </template>
 
-<script>
+<script lang="ts">
+import { defineComponent, ref, onMounted, onBeforeUnmount } from 'vue';
 import * as faceapi from 'face-api.js';
-import { LabeledFaceDescriptors } from 'face-api.js';
 import image1 from '/src/assets/images/1.png';
 import image2 from '/src/assets/images/2.png';
 
+export default defineComponent({
+  name: 'FaceAuthentication',
+  setup() {
+    const loadedModels = ref<boolean>(false);
+    const userImage = ref<HTMLImageElement | null>(null);
+    const referenceImageDescriptor = ref<Float32Array | null>(null);
+    const capturedImageSrc = ref<string | null>(null);
+    const datasetDescriptors = ref<Float32Array[]>([]);
 
-export default {
-  data() {
-    return {
-      loadedModels: false,
-      userImage: null,
-      referenceImageDescriptor: null,
-      capturedImageSrc: null,
-      datasetDescriptors: []
+    const video = ref<HTMLVideoElement | null>(null);
+
+    const loadModels = async () => {
+      await faceapi.nets.ssdMobilenetv1.loadFromUri('/models');
+      await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+      await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
     };
-  },
-  async mounted() {
-    await this.loadModels();
-    await this.prepareDataset([image1, image2]);
 
-
-    console.log("Dataset prepared.");
-      await this.loadModels();
-      this.loadedModels = true;
-      await this.startCamera();
-  },
-  methods: {
-
-    async prepareDataset(datasetUrls) {
+    const prepareDataset = async (datasetUrls: string[]) => {
       for (let imageUrl of datasetUrls) {
         const response = await fetch(imageUrl);
         const imageBlob = await response.blob();
         const image = await faceapi.bufferToImage(imageBlob);
         const detections = await faceapi.detectAllFaces(image).withFaceLandmarks().withFaceDescriptors();
         if (detections.length > 0) {
-          this.datasetDescriptors.push(detections[0].descriptor);
+          datasetDescriptors.value.push(detections[0].descriptor);
         }
       }
-    },
-    async startCamera() {
+    };
+
+    const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
-        this.$refs.video.srcObject = stream;
-
-        // Запуск таймера для автоматической съемки через 2 секунды
-        setTimeout(this.captureImageFromCamera, 2000);
+        if (video.value) {
+          video.value.srcObject = stream;
+        }
+        setTimeout(captureImageFromCamera, 2000);
       } catch (error) {
         console.error("Error accessing the camera:", error);
       }
-    },
+    };
 
-    beforeDestroy() {
-      const video = this.$refs.video;
-      if (video && video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
+    const captureImageFromCamera = async () => {
+      if (video.value) {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.value.videoWidth;
+        canvas.height = video.value.videoHeight;
+        canvas.getContext('2d')?.drawImage(video.value, 0, 0);
+
+        canvas.toBlob(async (blob) => {
+          if (blob) {
+            userImage.value = await faceapi.bufferToImage(blob);
+            capturedImageSrc.value = URL.createObjectURL(blob);
+          }
+        }, 'image/png');
       }
-    },
+    };
 
-    async captureImageFromCamera() {
-      const canvas = document.createElement('canvas');
-      canvas.width = this.$refs.video.videoWidth;
-      canvas.height = this.$refs.video.videoHeight;
-      canvas.getContext('2d').drawImage(this.$refs.video, 0, 0);
-
-      canvas.toBlob(async (blob) => {
-        this.userImage = await faceapi.bufferToImage(blob);
-        this.capturedImageSrc = URL.createObjectURL(blob);
-      }, 'image/png');
-    },
-
-    async loadModels() {
-      await faceapi.nets.ssdMobilenetv1.loadFromUri('/models');
-      await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-      await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
-    },
-
-    async uploadReferenceImage(event) {
-      if (this.loadedModels && event.target.files.length > 0) {
-        const image = await faceapi.bufferToImage(event.target.files[0]);
-        const detections = await faceapi.detectAllFaces(image).withFaceLandmarks().withFaceDescriptors();
-        if (detections.length > 0) {
-          this.referenceImageDescriptor = detections[0].descriptor;
-        } else {
-          console.error("No faces detected in the reference image.");
-        }
-      }
-    },
-
-    async uploadUserImage(event) {
-      if (this.loadedModels && event.target.files.length > 0) {
-        this.userImage = await faceapi.bufferToImage(event.target.files[0]);
-      }
-    },
-
-    async authenticateFace() {
-      if (!this.userImage) {
+    const authenticateFace = async () => {
+      if (!userImage.value) {
         console.error("Please capture the face first.");
         return;
       }
 
-      const detections = await faceapi.detectAllFaces(this.userImage).withFaceLandmarks().withFaceDescriptors();
-
+      const detections = await faceapi.detectAllFaces(userImage.value).withFaceLandmarks().withFaceDescriptors();
       if (detections.length === 0) {
         console.error("No faces detected in the user image.");
         return;
       }
 
-      // Измененная часть
-      const labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('knownFaces', this.datasetDescriptors);
+      const labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('knownFaces', datasetDescriptors.value);
       const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.6);
       const match = faceMatcher.findBestMatch(detections[0].descriptor);
 
@@ -125,16 +91,29 @@ export default {
       } else {
         alert("Face not recognized.");
       }
-    }
-  },
-  watch: {
-    referenceImageDescriptor() {
-      if (this.referenceImageDescriptor) {
-        this.startCamera();
+    };
+
+    onMounted(async () => {
+      await loadModels();
+      await prepareDataset([image1, image2]);
+      console.log("Dataset prepared.");
+      await startCamera();
+    });
+
+    onBeforeUnmount(() => {
+      const videoEl = video.value;
+      if (videoEl && videoEl.srcObject) {
+        videoEl.srcObject.getTracks().forEach(track => track.stop());
       }
-    }
+    });
+
+    return {
+      userImage,
+      capturedImageSrc,
+      authenticateFace
+    };
   }
-};
+});
 </script>
 
 <style>
