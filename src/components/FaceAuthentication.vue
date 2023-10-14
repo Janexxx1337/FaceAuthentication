@@ -1,20 +1,18 @@
 <template>
   <div>
-    <p>Upload a reference image:</p>
-    <input type="file" @change="uploadReferenceImage" />
-
-    <div v-if="referenceImageDescriptor">
-      <p>Capture an image from the camera:</p>
-      <video v-if="!userImage" ref="video" width="720" height="560" autoplay></video>
-      <img v-if="userImage" :src="capturedImageSrc" alt="Captured Image" width="720" height="560" />
-      <button @click="authenticateFace" :disabled="!userImage">Authenticate with Face</button>
-    </div>
+    <p>Capture an image from the camera:</p>
+    <video v-if="!userImage" ref="video" width="720" height="560" autoplay></video>
+    <img v-if="userImage" :src="capturedImageSrc" alt="Captured Image" width="720" height="560" />
+    <button @click="authenticateFace" :disabled="!userImage">Authenticate with Face</button>
   </div>
 </template>
 
 <script>
 import * as faceapi from 'face-api.js';
 import { LabeledFaceDescriptors } from 'face-api.js';
+import image1 from '/src/assets/images/1.png';
+import image2 from '/src/assets/images/2.png';
+
 
 export default {
   data() {
@@ -22,14 +20,33 @@ export default {
       loadedModels: false,
       userImage: null,
       referenceImageDescriptor: null,
-      capturedImageSrc: null
+      capturedImageSrc: null,
+      datasetDescriptors: []
     };
   },
   async mounted() {
     await this.loadModels();
-    this.loadedModels = true;
+    await this.prepareDataset([image1, image2]);
+
+
+    console.log("Dataset prepared.");
+      await this.loadModels();
+      this.loadedModels = true;
+      await this.startCamera();
   },
   methods: {
+
+    async prepareDataset(datasetUrls) {
+      for (let imageUrl of datasetUrls) {
+        const response = await fetch(imageUrl);
+        const imageBlob = await response.blob();
+        const image = await faceapi.bufferToImage(imageBlob);
+        const detections = await faceapi.detectAllFaces(image).withFaceLandmarks().withFaceDescriptors();
+        if (detections.length > 0) {
+          this.datasetDescriptors.push(detections[0].descriptor);
+        }
+      }
+    },
     async startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
@@ -86,8 +103,8 @@ export default {
     },
 
     async authenticateFace() {
-      if (!this.userImage || !this.referenceImageDescriptor) {
-        console.error("Please upload both images.");
+      if (!this.userImage) {
+        console.error("Please capture the face first.");
         return;
       }
 
@@ -98,11 +115,12 @@ export default {
         return;
       }
 
-      const labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('reference', [this.referenceImageDescriptor]);
+      // Измененная часть
+      const labeledFaceDescriptors = new faceapi.LabeledFaceDescriptors('knownFaces', this.datasetDescriptors);
       const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.6);
       const match = faceMatcher.findBestMatch(detections[0].descriptor);
 
-      if (match.label === "reference") {
+      if (match.label === "knownFaces") {
         alert("Authenticated successfully!");
       } else {
         alert("Face not recognized.");
@@ -124,7 +142,7 @@ export default {
   video, img {
     display: block;
     margin: 0 auto;
-     width: 90%;
+    width: 90%;
   }
 }
 </style>
